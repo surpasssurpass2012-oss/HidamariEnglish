@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ひだまり English Coach</title>
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Custom Styles & Animation Polyfills -->
+    <style>
+        body { font-family: 'Noto Sans JP', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #f3f4f6; border-radius: 50px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes zoomIn95 { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+        @keyframes slideInFromLeft4 { from { opacity: 0; transform: translateX(-1rem); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes slideInFromBottom6 { from { opacity: 0; transform: translateY(1.5rem); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation-name: fadeIn; animation-fill-mode: both; }
+        .fade-in { animation-name: fadeIn; }
+        .zoom-in-95 { animation-name: zoomIn95; }
+        .slide-in-from-left-4 { animation-name: slideInFromLeft4; }
+        .slide-in-from-bottom-6 { animation-name: slideInFromBottom6; }
+        .duration-300 { animation-duration: 300ms; }
+        .duration-500 { animation-duration: 500ms; }
+        .duration-700 { animation-duration: 700ms; }
+        .duration-1000 { animation-duration: 1000ms; }
+    </style>
+
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-[#fdfaf6]">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-analytics.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js';
+        import { getFirestore, collection, doc, setDoc, query, onSnapshot, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+        
+        // Import Lucide Icons
+        import { 
+            BookOpen, Users, Settings, Send, Lightbulb, BarChart3, Upload, Download,
+            ChevronRight, AlertCircle, LogOut, Coffee, Smile, GraduationCap, Trophy,
+            RefreshCcw, Languages, FileText, ChevronLeft, CheckCircle, ClipboardCheck,
+            Award, Type, Layout, MessageCircle, Sticker, UserPlus, Eye, ArrowRight,
+            Database, History, TrendingUp, KeyRound, LogIn, FileUp, FolderOpen
+        } from 'https://esm.sh/lucide-react@0.344.0?bundle';
+
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- Firebase Configuration ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyCcRzVIaQZCbZHHZemjHhGScH03bUD3res",
+            authDomain: "hidamari-english-coach.firebaseapp.com",
+            projectId: "hidamari-english-coach",
+            storageBucket: "hidamari-english-coach.firebasestorage.app",
+            messagingSenderId: "695307784897",
+            appId: "1:695307784897:web:12817fadeb14d0a7777a40",
+            measurementId: "G-X1PS3YY8MK"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const analytics = firebaseConfig.measurementId ? getAnalytics(app) : null;
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = "hidamari-english-coach-v3";
+
+        // --- API Helper (Serverless) ---
+        async function callGemini(userQuery, systemPrompt) {
+            const url = '/api/gemini'; 
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] }
+            };
+            
+            let delay = 1000;
+            for (let i = 0; i < 5; i++) {
+                try {
+                    const response = await fetch(url, { 
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify(payload) 
+                    });
+                    
+                    if (!response.ok) {
+                        const err = await response.json();
+                        throw new Error(err.error || `HTTP error! status: ${response.status}`);
+                    }
+                    
+                    const result = await response.json();
+                    return result.candidates?.[0]?.content?.parts?.[0]?.text;
+                } catch (error) {
+                    if (i === 4) throw error;
+                    await new Promise(r => setTimeout(r, delay));
+                    delay *= 2;
+                }
+            }
+        }
+
+        // --- Main App ---
+        function App() {
+            const [user, setUser] = useState(null);
+            const [view, setView] = useState('login'); 
+            const [role, setRole] = useState('student'); 
+            const [loading, setLoading] = useState(true);
+            const [problems, setProblems] = useState([]);
+            const [submissions, setSubmissions] = useState([]);
+            const [students, setStudents] = useState([]);
+            const [currentStudentInfo, setCurrentStudentInfo] = useState(null);
+
+            useEffect(() => {
+                const initAuth = async () => {
+                    try { await signInAnonymously(auth); } 
+                    catch (err) { console.error("Auth Error", err); } 
+                    finally { setLoading(false); }
+                };
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, (u) => {
+                    setUser(u);
+                    if (u) setLoading(false);
+                });
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+                const unsubProblems = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'problems'), (snap) => setProblems(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+                const unsubSubs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'all_submissions'), (snap) => setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+                const unsubStudents = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'students'), (snap) => setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+                return () => { unsubProblems(); unsubSubs(); unsubStudents(); };
+            }, [user]);
+
+            if (loading) return (
+                <div className="flex items-center justify-center min-h-screen bg-[#fdfaf6]">
+                    <div className="animate-spin rounded-full h-12 w-12 border-4 border-amber-100 border-t-amber-500"></div>
+                </div>
+            );
+
+            if (view === 'login') {
+                return (
+                    <LoginGate 
+                        students={students} 
+                        onLogin={(student, r) => { 
+                            setRole(r); 
+                            if (r === 'admin') { 
+                                setView('teacher'); 
+                                setCurrentStudentInfo({ studentId: 'admin', studentName: '管理者' }); 
+                            } else { 
+                                setCurrentStudentInfo(student); 
+                                setView('student'); 
+                            } 
+                        }} 
+                    />
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-[#fdfaf6] text-stone-800 font-sans antialiased">
+                    <nav className="bg-white/80 backdrop-blur-xl border-b border-amber-100/50 px-4 md:px-6 py-4 flex justify-between items-center sticky top-0 z-50 shadow-sm">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-2 rounded-xl shadow-lg">
+                                <GraduationCap className="text-white w-5 h-5 md:w-6 md:h-6" />
+                            </div>
+                            <div>
+                                <h1 className="font-black text-sm md:text-lg text-stone-800 leading-none">ひだまり English Coach</h1>
+                                <p className="text-[10px] font-bold text-amber-600 uppercase mt-1 tracking-wider">
+                                    {role === 'admin' ? 'Admin Mode' : `User: ${currentStudentInfo?.studentName}`}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            {role === 'admin' && (
+                                <div className="flex bg-stone-100 p-1 rounded-xl text-[10px] font-bold">
+                                    <button onClick={() => setView('student')} className={`px-3 py-1.5 rounded-lg transition-all ${view === 'student' ? 'bg-white shadow-sm text-amber-600' : 'text-stone-400'}`}>学習画面</button>
+                                    <button onClick={() => setView('teacher')} className={`px-3 py-1.5 rounded-lg transition-all ${view === 'teacher' ? 'bg-white shadow-sm text-amber-600' : 'text-stone-400'}`}>管理画面</button>
+                                </div>
+                            )}
+                            <button onClick={() => { setView('login'); setRole('student'); setCurrentStudentInfo(null); }} className="flex items-center gap-2 text-stone-400 font-bold text-xs hover:text-rose-500 transition-colors bg-stone-50 px-3 py-2 rounded-xl border border-stone-100 shadow-sm">
+                                <LogOut className="w-4 h-4" /> <span className="hidden md:inline">ログアウト</span>
+                            </button>
+                        </div>
+                    </nav>
+
+                    <main className="max-w-7xl mx-auto p-4 md:p-8">
+                        {view === 'student' ? (
+                            <StudentWorkflow problems={problems} submissions={submissions} studentInfo={currentStudentInfo} />
+                        ) : (
+                            <TeacherView problems={problems} submissions={submissions} students={students} />
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        // --- Login Gate ---
+        function LoginGate({ students, onLogin }) {
+            const [idInput, setIdInput] = useState("");
+            const [passInput, setPassInput] = useState("");
+            const [error, setError] = useState("");
+
+            const handleLogin = () => {
+                if (idInput === "admin" && passInput === "admin") {
+                    onLogin(null, 'admin');
+                    return;
+                }
+                const student = students.find(s => s.studentId === idInput);
+                if (!student) {
+                    setError("入力されたIDは登録されていません。");
+                    return;
+                }
+                onLogin(student, 'student');
+            };
+
+            return (
+                <div className="min-h-screen bg-[#fdfaf6] flex items-center justify-center p-6">
+                    <div className="max-w-md w-full animate-in zoom-in-95 duration-700">
+                        <div className="text-center mb-10">
+                            <div className="bg-gradient-to-br from-amber-400 to-orange-500 w-20 h-20 rounded-[2rem] flex items-center justify-center mx-auto mb-6 shadow-2xl">
+                                <GraduationCap className="text-white w-10 h-10" />
+                            </div>
+                            <h2 className="text-3xl font-black text-stone-800 tracking-tight">Hidamari Login</h2>
+                            <p className="text-stone-400 font-medium mt-2">あなたの学びを始めましょう</p>
+                        </div>
+                        <div className="bg-white p-10 rounded-[3rem] shadow-2xl border-2 border-white space-y-6">
+                            <div>
+                                <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest px-2 mb-2 block font-bold">生徒ID</label>
+                                <input type="text" value={idInput} onChange={(e) => setIdInput(e.target.value)} placeholder="IDを入力" className="w-full bg-stone-50 border-2 border-stone-50 rounded-2xl py-4 px-6 focus:bg-white focus:border-amber-400 focus:outline-none transition-all font-bold" />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest px-2 mb-2 block font-bold">パスワード (管理者のみ)</label>
+                                <input type="password" value={passInput} onChange={(e) => setPassInput(e.target.value)} placeholder="管理者は admin" className="w-full bg-stone-50 border-2 border-stone-50 rounded-2xl py-4 px-6 focus:bg-white focus:border-amber-400 focus:outline-none transition-all font-bold" />
+                            </div>
+                            {error && <div className="text-rose-500 text-xs font-bold px-2 animate-bounce">{error}</div>}
+                            <button onClick={handleLogin} className="w-full bg-stone-800 text-white py-5 rounded-[1.5rem] font-black shadow-xl hover:bg-stone-700 active:scale-95 transition-all flex items-center justify-center gap-3">
+                                <LogIn className="w-5 h-5" /> ログイン
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Student Workflow ---
+        function StudentWorkflow({ problems, submissions, studentInfo }) {
+            const [step, setStep] = useState('category'); 
+            const [selectedCategory, setSelectedCategory] = useState(null); 
+            const [currentProblem, setCurrentProblem] = useState(null);
+            const [selectedSubmission, setSelectedSubmission] = useState(null);
+
+            const filteredProblems = useMemo(() => problems.filter(p => p.type === selectedCategory), [problems, selectedCategory]);
+
+            const resetToCategory = () => { setStep('category'); setSelectedCategory(null); setCurrentProblem(null); };
+            const resetToProblemSelect = () => { setStep('problem-select'); setCurrentProblem(null); };
+            const resetToPortfolio = () => { setStep('portfolio'); setSelectedSubmission(null); };
+
+            if (step === 'category') {
+                return (
+                    <div className="max-w-4xl mx-auto py-8 animate-in fade-in duration-700">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+                            <button onClick={() => { setSelectedCategory('translation'); setStep('problem-select'); }} className="group bg-white p-12 rounded-[2.5rem] border-4 border-white hover:border-amber-200 shadow-xl transition-all text-center flex flex-col items-center">
+                                <div className="w-20 h-20 bg-amber-50 rounded-2xl flex items-center justify-center mb-6 shadow-inner"><Languages className="w-10 h-10 text-amber-500" /></div>
+                                <h3 className="text-xl md:text-2xl font-black text-stone-800 mb-3 tracking-tight">和文英訳</h3>
+                                <p className="text-stone-400 text-xs md:text-sm leading-relaxed px-4">日本語の真意を掴み、自然な英語へ。</p>
+                            </button>
+                            <button onClick={() => { setSelectedCategory('essay'); setStep('problem-select'); }} className="group bg-white p-12 rounded-[2.5rem] border-4 border-white hover:border-orange-200 shadow-xl transition-all text-center flex flex-col items-center">
+                                <div className="w-20 h-20 bg-orange-50 rounded-2xl flex items-center justify-center mb-6 shadow-inner"><FileText className="w-10 h-10 text-orange-500" /></div>
+                                <h3 className="text-xl md:text-2xl font-black text-stone-800 mb-3 tracking-tight">パラグラフ執筆</h3>
+                                <p className="text-stone-400 text-xs md:text-sm leading-relaxed px-4">自分の意見を論理的に伝える練習。</p>
+                            </button>
+                        </div>
+                        <div className="max-w-sm mx-auto">
+                            <button onClick={() => setStep('portfolio')} className="w-full bg-stone-800 text-white p-6 rounded-[2rem] shadow-xl hover:bg-stone-700 transition-all flex items-center justify-center gap-4 group">
+                                <History className="w-6 h-6 text-amber-400 group-hover:rotate-[-20deg] transition-transform" />
+                                <div className="text-left"><p className="text-[10px] font-black uppercase text-amber-400 tracking-widest leading-none">Portfolio</p><p className="font-bold text-lg leading-none">これまでのあゆみを振り返る</p></div>
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'problem-select') {
+                return (
+                    <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-left-4">
+                        <button onClick={resetToCategory} className="flex items-center gap-2 text-stone-400 font-bold text-xs md:text-sm mb-8 hover:text-amber-600 transition-colors"><ChevronLeft className="w-4 h-4" /> 戻る</button>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {filteredProblems.map(p => (
+                                <button key={p.id} onClick={() => { setCurrentProblem(p); setStep('editor'); }} className="bg-white p-6 md:p-8 rounded-[2rem] border-2 border-stone-100 hover:border-amber-400 hover:shadow-xl transition-all text-left flex flex-col justify-between min-h-[160px] group shadow-sm relative overflow-hidden">
+                                    <div><div className="flex justify-between items-center mb-4"><span className="text-[9px] font-black text-amber-600 bg-amber-50 px-3 py-1 rounded-full uppercase tracking-tighter leading-none">Level {p.difficulty || 1}</span><ChevronRight className="w-5 h-5 text-stone-200 group-hover:text-amber-500 transition-all" /></div><h3 className="font-bold text-base md:text-lg text-stone-800 line-clamp-2 leading-tight tracking-tight">{p.title}</h3></div>
+                                    <p className="text-[11px] md:text-xs text-stone-400 italic line-clamp-2 mt-2">"{p.japaneseText}"</p>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'portfolio') {
+                return <StudentPortfolio submissions={submissions} problems={problems} studentInfo={studentInfo} onBack={resetToCategory} onViewDetail={(sub, prob) => { setSelectedSubmission(sub); setCurrentProblem(prob); setStep('portfolio-detail'); }} />;
+            }
+
+            if (step === 'portfolio-detail') {
+                return (
+                    <div className="animate-in zoom-in-95 duration-500">
+                        <button onClick={resetToPortfolio} className="flex items-center gap-2 text-stone-400 font-bold text-xs md:text-sm mb-8 hover:text-amber-600 transition-colors"><ChevronLeft className="w-4 h-4" /> 履歴一覧に戻る</button>
+                        <ReviewDisplay review={selectedSubmission.reviewData} answer={selectedSubmission.answerText} isReadOnly={true} problem={currentProblem} onComplete={resetToPortfolio} />
+                    </div>
+                );
+            }
+
+            return (
+                <div className="animate-in fade-in duration-700">
+                    <div className="flex justify-between items-center mb-8 px-2">
+                        <button onClick={resetToProblemSelect} className="flex items-center gap-2 text-stone-400 font-bold text-xs md:text-sm hover:text-amber-600 transition-colors"><ChevronLeft className="w-4 h-4" /> 演習リスト</button>
+                        <div className="flex items-center gap-2"><span className="text-[9px] md:text-[10px] font-black text-stone-400 bg-stone-100 px-3 py-1 rounded-full uppercase tracking-widest">{selectedCategory === 'translation' ? '和文英訳' : 'パラグラフ'}</span></div>
+                    </div>
+                    <StudentEditor problem={currentProblem} studentInfo={studentInfo} onComplete={resetToProblemSelect} />
+                </div>
+            );
+        }
+
+        // --- StudentEditor ---
+        function StudentEditor({ problem, studentInfo, onComplete }) {
+            const [answer, setAnswer] = useState("");
+            const [aiFeedback, setAiFeedback] = useState(null);
+            const [isAiLoading, setIsAiLoading] = useState(false);
+            const [isSubmitting, setIsSubmitting] = useState(false);
+            const [hintCount, setHintCount] = useState(0);
+            const [finalReview, setFinalReview] = useState(null);
+
+            const handleGetHint = async () => {
+                if (!answer.trim()) return;
+                setIsAiLoading(true);
+                setHintCount(prev => prev + 1);
+                const systemPrompt = `あなたは英語学習コーチ「ひだまりコーチ」です。生徒の今の解答レベルに合わせて、洗練された表現を1つ示唆してください。直接の答えは言わず、生徒が自分で気づけるようなヒントを日本語で伝えてください。個別指示：${problem.logicPrompt || 'なし'}`;
+                try {
+                    const feedback = await callGemini(`お題：${problem.japaneseText}\n現在の解答：${answer}\nヒントをください。`, systemPrompt);
+                    setAiFeedback(feedback);
+                    const subId = `${studentInfo.studentId}_${problem.id}`;
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'all_submissions', subId), { 
+                        studentId: studentInfo.studentId, 
+                        studentName: studentInfo.studentName, 
+                        problemId: problem.id, 
+                        problemType: problem.type, 
+                        answerText: answer, 
+                        hintCount: hintCount + 1, 
+                        updatedAt: serverTimestamp(), 
+                        status: 'draft' 
+                    }, { merge: true });
+                } catch (err) { setAiFeedback("コーチと考え中... もう一度試してみて！"); console.error(err); } finally { setIsAiLoading(false); }
+            };
+
+            const handleSubmit = async () => {
+                if (!answer.trim()) return;
+                setIsSubmitting(true);
+                const systemPrompt = `あなたはプロの英語教師であり、添削のエキスパートです。間違いの指摘だけでなく詳細な解説を行い、生徒のレベルに寄り添った洗練された修正案を提示してください。各25点満点（構成, 内容, 語彙, 文法）で採点しレスポンス形式はJSONのみ： {"scores": {"organization": {"score": 0-25, "reason": "理由"}, "content": {"score": 0-25, "reason": "理由"}, "vocabulary": {"score": 0-25, "reason": "理由"}, "grammar": {"score": 0-25, "reason": "理由"}}, "totalScore": 合計点, "correctedEnglish": "修正案", "detailedFeedback": "非常に詳細な日本語解説"}`;
+                
+                try {
+                    const response = await fetch('/api/gemini', { 
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify({ 
+                            contents: [{ parts: [{ text: `解答：${answer}\n模範解答例：${problem.modelAnswer || 'なし'}` }] }], 
+                            systemInstruction: { parts: [{ text: systemPrompt }] }, 
+                            generationConfig: { responseMimeType: "application/json" } 
+                        }) 
+                    });
+
+                    if (!response.ok) throw new Error("API Error");
+                    const result = await response.json();
+                    const reviewData = JSON.parse(result.candidates?.[0]?.content?.parts?.[0]?.text);
+                    
+                    setFinalReview(reviewData);
+                    const subId = `${studentInfo.studentId}_${problem.id}`;
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'all_submissions', subId), { 
+                        studentId: studentInfo.studentId, 
+                        studentName: studentInfo.studentName, 
+                        problemId: problem.id, 
+                        problemType: problem.type, 
+                        answerText: answer, 
+                        reviewData, 
+                        status: 'submitted', 
+                        submittedAt: serverTimestamp(), 
+                        updatedAt: serverTimestamp() 
+                    }, { merge: true });
+                } catch (err) { alert("添削中にエラーが発生しました。"); console.error(err); } finally { setIsSubmitting(false); }
+            };
+
+            if (finalReview) return <ReviewDisplay review={finalReview} answer={answer} onComplete={onComplete} problem={problem} />;
+
+            return (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-10 items-start pb-24 animate-in fade-in">
+                    <div className="space-y-6">
+                        <div className="bg-white p-6 md:p-10 rounded-[2rem] shadow-sm border border-orange-100 shadow-orange-50/50">
+                            <h3 className="text-[10px] font-black text-amber-500 uppercase mb-3 tracking-widest tracking-[0.2em]">Exercise Topic</h3>
+                            <p className="text-lg md:text-2xl font-black text-stone-800 leading-relaxed">{problem.japaneseText}</p>
+                        </div>
+                        <div className="bg-white p-6 md:p-12 rounded-[2.5rem] shadow-sm border border-orange-100 flex flex-col shadow-xl shadow-orange-50/20">
+                            <textarea value={answer} onChange={(e) => setAnswer(e.target.value)} className="w-full h-80 md:h-[460px] p-6 md:p-10 text-lg md:text-xl bg-white border-2 border-stone-50 rounded-[1.5rem] focus:border-amber-400 focus:outline-none transition-all duration-500 resize-none font-mono leading-[1.6] shadow-inner" placeholder="ここに英語を入力..." />
+                            <div className="grid grid-cols-2 gap-4 mt-6">
+                                <button onClick={handleGetHint} disabled={isAiLoading || isSubmitting || !answer.trim()} className="bg-white border-2 border-amber-400 text-amber-600 font-black py-4 rounded-2xl hover:bg-amber-50 flex items-center justify-center gap-2 group shadow-sm active:scale-95"><Lightbulb className="w-5 h-5 group-hover:animate-bounce" /> ヒント</button>
+                                <button onClick={handleSubmit} disabled={isAiLoading || isSubmitting || !answer.trim()} className="bg-gradient-to-br from-amber-500 to-orange-600 text-white font-black py-4 rounded-2xl shadow-xl hover:shadow-orange-300 transition-all flex items-center justify-center gap-2 active:scale-95">{isSubmitting ? "分析中..." : "提出する"}</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="bg-[#1f1d1b] rounded-[2.5rem] p-8 md:p-12 text-stone-100 min-h-[400px] md:min-h-[760px] shadow-2xl border border-stone-800 relative flex flex-col overflow-hidden">
+                        <div className="absolute top-0 right-0 w-48 h-48 bg-amber-500/10 rounded-full blur-[80px]"></div>
+                        <div className="flex items-center gap-4 mb-8 relative z-10"><div className="w-12 h-12 bg-gradient-to-tr from-amber-400 to-orange-500 rounded-2xl flex items-center justify-center shadow-2xl transform rotate-3 shadow-orange-500/20"><Smile className="text-white w-8 h-8" /></div><div><p className="font-black text-xl md:text-2xl text-white tracking-tight leading-none">AI Coach</p><p className="text-[8px] text-amber-500 font-black uppercase mt-1 tracking-[0.4em]">Personal Buddy</p></div></div>
+                        <div className="flex-1 space-y-6 z-10">{isAiLoading ? <div className="flex flex-col items-center justify-center py-20 gap-6 opacity-60"><div className="animate-spin rounded-full h-10 w-10 border-4 border-amber-500 border-t-transparent shadow-[0_0_15px_rgba(245,158,11,0.4)]"></div><p className="text-[10px] font-black uppercase text-amber-500 animate-pulse tracking-widest">分析中...</p></div> : aiFeedback ? <div className="bg-white/5 p-8 rounded-[1.5rem] border border-white/10 animate-in duration-700 shadow-inner"><p className="text-[15px] md:text-[17px] leading-[2.2] text-stone-200 whitespace-pre-wrap font-medium">{aiFeedback}</p></div> : <div className="text-center py-20 opacity-20"><Coffee className="w-12 h-12 md:w-20 md:h-20 mx-auto mb-6 text-stone-600" /><p className="text-stone-500 text-[10px] font-black uppercase px-12 text-center leading-loose tracking-widest">まずは今のあなたの<br/>精一杯を伝えてみよう！</p></div>}</div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Review Display ---
+        function ReviewDisplay({ review, answer, onComplete, problem, isReadOnly = false }) {
+            const { scores, totalScore, correctedEnglish, detailedFeedback } = review;
+            return (
+                <div className="max-w-6xl mx-auto py-4 animate-in zoom-in-95 duration-700 pb-40">
+                    <div className="bg-white rounded-[2.5rem] md:rounded-[4rem] shadow-2xl border-2 border-amber-50 overflow-hidden shadow-orange-50/20">
+                        <div className="bg-gradient-to-r from-amber-500 to-orange-500 p-8 md:p-12 text-white text-center shadow-lg relative">
+                            <Trophy className="w-12 h-12 md:w-16 md:h-16 mx-auto mb-4 opacity-80" />
+                            <h2 className="text-3xl md:text-4xl font-black mb-2 tracking-tight leading-tight">Well Done!</h2>
+                            <p className="opacity-90 font-medium text-xs md:text-base">自分自身の力で掴み取った成果を確認しましょう。</p>
+                        </div>
+                        <div className="p-6 md:p-14 space-y-12">
+                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+                                <div className="lg:col-span-4 flex flex-col items-center justify-center p-8 bg-orange-50/50 rounded-[2.5rem] border border-orange-100 shadow-inner">
+                                   <p className="text-[10px] md:text-sm font-black text-orange-400 uppercase tracking-widest mb-6">総合スコア</p>
+                                   <div className="relative w-32 h-32 md:w-48 flex items-center justify-center">
+                                      <svg className="w-full h-full transform -rotate-90"><circle cx="50%" cy="50%" r="42%" stroke="currentColor" strokeWidth="12" fill="transparent" className="text-orange-100" /><circle cx="50%" cy="50%" r="42%" stroke="currentColor" strokeWidth="12" fill="transparent" strokeDasharray="300" strokeDashoffset={300 - (300 * (totalScore || 0)) / 100} className="text-orange-500 transition-all duration-1000" /></svg>
+                                      <span className="absolute text-3xl md:text-5xl font-black text-stone-800">{totalScore}</span>
+                                   </div>
+                                </div>
+                                <div className="lg:col-span-8 space-y-4">
+                                    <h3 className="text-xs font-black text-amber-600 uppercase px-2 mb-4 font-bold tracking-widest">観点別詳細評価</h3>
+                                    {['organization', 'content', 'vocabulary', 'grammar'].map(key => (
+                                        <div key={key} className="space-y-2">
+                                            <div className="flex justify-between items-end px-2"><span className="text-xs md:text-sm font-black text-stone-700 uppercase">{key === 'organization' ? '構成' : key === 'content' ? '内容' : key === 'vocabulary' ? '語彙' : '文法'}</span><span className="text-xs font-black text-orange-500">{(scores && scores[key]?.score) || 0} / 25</span></div>
+                                            <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden shadow-inner"><div className="h-full bg-orange-400 rounded-full transition-all duration-1000" style={{ width: `${(((scores && scores[key]?.score) || 0) / 25) * 100}%` }}></div></div>
+                                            <p className="text-[10px] text-stone-400 px-2 leading-relaxed italic font-medium">{(scores && scores[key]?.reason) || ''}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="bg-stone-50 p-6 rounded-[1.5rem] border border-stone-100 shadow-inner"><h4 className="text-[9px] font-black text-stone-400 uppercase mb-2 tracking-widest">Original Topic</h4><p className="text-base font-black text-stone-700 italic leading-relaxed">"{problem?.japaneseText}"</p></div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4 border-t border-stone-100">
+                                <div className="space-y-3"><h4 className="text-[10px] font-black text-stone-400 uppercase tracking-widest">提出した解答</h4><div className="bg-stone-50 p-6 md:p-10 rounded-[2rem] border min-h-[160px] text-base md:text-lg font-mono text-stone-700 whitespace-pre-wrap leading-relaxed shadow-inner">{answer}</div></div>
+                                <div className="space-y-3"><h4 className="text-[10px] font-black text-amber-500 uppercase tracking-widest">コーチのおすすめ表現</h4><div className="bg-amber-50/30 p-6 md:p-10 rounded-[2rem] border border-amber-100 min-h-[160px] text-base md:text-lg font-mono text-amber-800 whitespace-pre-wrap leading-relaxed shadow-inner">{correctedEnglish}</div></div>
+                            </div>
+                            <div className="bg-stone-800 p-8 md:p-14 rounded-[2.5rem] md:rounded-[4rem] text-stone-100 relative shadow-2xl h-auto overflow-hidden shadow-stone-500/20">
+                                <div className="absolute top-0 right-0 p-8 opacity-10"><ClipboardCheck className="w-56 h-56" /></div>
+                                <h3 className="text-xl md:text-2xl font-black text-white mb-8 flex items-center gap-4 relative z-10 tracking-tight"><Award className="text-amber-400 w-10 h-10" /> ひだまりコーチからの徹底解説</h3>
+                                <div className="prose prose-invert prose-lg max-w-none text-stone-100 leading-[2.4] whitespace-pre-wrap relative z-10 font-medium">{detailedFeedback}</div>
+                                <div className="mt-16 pt-10 border-t border-white/10 relative z-10 text-center text-[11px] text-stone-500 font-black uppercase italic tracking-[0.2em]">無理に難しい言葉を使う必要はありません。今のあなたの武器を磨きましょう。</div>
+                            </div>
+                            {!isReadOnly && <div className="flex justify-center pt-8 pb-10"><button onClick={onComplete} className="bg-stone-800 text-white font-black px-10 py-4 rounded-3xl shadow-xl hover:bg-stone-700 transition-all active:scale-95 text-sm shadow-stone-300">一覧に戻る <ChevronRight className="w-4 h-4" /></button></div>}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Portfolio ---
+        function StudentPortfolio({ submissions, problems, studentInfo, onBack, onViewDetail }) {
+            const mySubmissions = useMemo(() => submissions.filter(s => s.studentId === studentInfo.studentId && s.status === 'submitted').sort((a, b) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0)), [submissions, studentInfo]);
+            const stats = useMemo(() => {
+                const totalCount = mySubmissions.length;
+                const totalWords = mySubmissions.reduce((sum, s) => sum + (s.answerText?.trim().split(/\s+/).length || 0), 0);
+                const avgScore = totalCount > 0 ? Math.round(mySubmissions.reduce((sum, s) => sum + (s.reviewData?.totalScore || 0), 0) / totalCount) : 0;
+                return { totalCount, totalWords, avgScore };
+            }, [mySubmissions]);
+            return (
+                <div className="max-w-6xl mx-auto py-8 animate-in fade-in slide-in-from-bottom-6 duration-700">
+                    <button onClick={onBack} className="flex items-center gap-2 text-stone-400 font-bold text-xs mb-10 hover:text-amber-600 transition-colors"><ChevronLeft className="w-4 h-4" /> ホームへ</button>
+                    <div className="flex items-center gap-4 mb-10"><div className="p-4 bg-stone-800 rounded-3xl text-amber-400 shadow-xl shadow-orange-50/50"><History className="w-8 h-8" /></div><div><h2 className="text-2xl md:text-3xl font-black text-stone-800 tracking-tight leading-none">学習のあゆみ</h2><p className="text-stone-400 font-medium text-xs mt-2">{studentInfo.studentName}さんのこれまでの軌跡</p></div></div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+                        <div className="bg-white p-8 rounded-[2rem] shadow-xl border border-amber-50 text-center relative overflow-hidden shadow-orange-50/10"><p className="text-[9px] font-black text-stone-400 uppercase mb-2 tracking-widest leading-none">演習数</p><div className="flex items-end justify-center gap-2"><span className="text-4xl md:text-5xl font-black text-amber-600 leading-none">{stats.totalCount}</span><span className="text-stone-300 font-bold mb-2 text-xs">題</span></div></div>
+                        <div className="bg-white p-8 rounded-[2rem] shadow-xl border border-orange-50 text-center relative overflow-hidden shadow-orange-50/10"><p className="text-[9px] font-black text-stone-400 uppercase mb-2 tracking-widest leading-none">累積語数</p><div className="flex items-end justify-center gap-2"><span className="text-4xl md:text-5xl font-black text-orange-500 leading-none">{stats.totalWords}</span><span className="text-stone-300 font-bold mb-2 text-[10px] uppercase tracking-tighter">words</span></div></div>
+                        <div className="bg-white p-8 rounded-[2rem] shadow-xl border border-amber-50 text-center relative overflow-hidden shadow-orange-50/10"><p className="text-[9px] font-black text-stone-400 uppercase mb-2 tracking-widest leading-none">平均スコア</p><div className="flex items-end justify-center gap-2"><span className="text-4xl md:text-5xl font-black text-amber-600 leading-none">{stats.avgScore}</span><span className="text-stone-300 font-bold mb-2 text-[10px] uppercase tracking-tighter">/ 100</span></div></div>
+                    </div>
+                    <div className="space-y-4">
+                        {mySubmissions.map(s => {
+                            const prob = problems.find(p => p.id === s.problemId) || { title: "不明な演習", japaneseText: "-" };
+                            return (
+                                <button key={s.id} onClick={() => onViewDetail(s, prob)} className="bg-white p-6 md:p-8 rounded-[2rem] border-2 border-stone-50 hover:border-amber-400 hover:shadow-xl transition-all text-left flex flex-col md:flex-row justify-between items-center group shadow-sm active:scale-[0.98]">
+                                    <div className="flex-1 w-full space-y-2">
+                                        <div className="flex items-center gap-3"><span className={`text-[8px] md:text-[9px] font-black px-2 py-0.5 rounded-full border uppercase tracking-widest ${s.problemType === 'translation' ? 'bg-amber-50 border-amber-100 text-amber-600' : 'bg-orange-50 border-orange-100 text-orange-600'}`}>{s.problemType === 'translation' ? '和訳' : 'エッセイ'}</span><span className="text-[10px] text-stone-300 font-bold">{s.submittedAt?.toDate().toLocaleDateString()}</span></div>
+                                        <h4 className="font-black text-base md:text-lg text-stone-800 group-hover:text-amber-600 transition-colors leading-tight">{prob.title}</h4>
+                                        <p className="text-[11px] text-stone-400 italic line-clamp-1">"{s.answerText}"</p>
+                                    </div>
+                                    <div className="mt-4 md:mt-0 flex items-center gap-6"><div className="text-right md:text-center"><p className="text-[8px] font-black text-stone-300 uppercase mb-1 tracking-widest">Score</p><p className="text-xl md:text-2xl font-black text-amber-500 leading-none">{s.reviewData?.totalScore || 0}</p></div><ChevronRight className="w-5 h-5 text-stone-200 group-hover:translate-x-1 transition-all" /></div>
+                                </button>
+                            );
+                        })}
+                        {mySubmissions.length === 0 && <div className="text-center py-20 bg-white rounded-[2rem] border border-dashed text-stone-300 font-bold">まだデータがありません</div>}
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Teacher View & Managers ---
+        function TeacherView({ problems, submissions, students }) {
+            const [activeTab, setActiveTab] = useState('progress'); 
+            const [drillStep, setDrillStep] = useState('category'); 
+            const [selectedCat, setSelectedCat] = useState(null);
+            const [selectedProb, setSelectedProb] = useState(null);
+            const [selectedSub, setSelectedSub] = useState(null);
+            const stats = useMemo(() => {
+                const totalCount = students.length || 1;
+                const submittedCount = submissions.filter(s => s.status === 'submitted').length;
+                return { percent: Math.round((submittedCount / totalCount) * 100), submittedCount, total: students.length };
+            }, [submissions, students]);
+            useEffect(() => { setDrillStep('category'); setSelectedCat(null); setSelectedProb(null); setSelectedSub(null); }, [activeTab]);
+
+            return (
+                <div className="space-y-10 animate-in fade-in pb-20 duration-700">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-8">
+                        <div className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-amber-50 group overflow-hidden shadow-orange-50/20"><p className="text-[11px] font-black text-stone-300 uppercase mb-4 tracking-widest leading-none">Class Health</p><div className="flex items-end gap-3 leading-none"><span className="text-5xl md:text-6xl font-black text-amber-600 tracking-tighter">{stats.percent}%</span><span className="text-stone-400 font-bold mb-1 text-xs">{stats.submittedCount} / {stats.total} 提出</span></div><div className="w-full bg-stone-100 h-2 rounded-full mt-8 overflow-hidden"><div className="bg-amber-500 h-full transition-all duration-1000 shadow-orange-500/50" style={{ width: `${stats.percent}%` }}></div></div></div>
+                        <div className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-stone-50 flex items-center justify-between shadow-orange-50/20"><div className="space-y-2"><p className="text-[11px] font-black text-stone-300 uppercase tracking-widest leading-none">Students</p><p className="text-4xl md:text-5xl font-black text-stone-800 leading-none">{students.length}名</p></div><div className="p-4 bg-amber-50 rounded-2xl md:rounded-3xl text-amber-500 shadow-sm"><Users className="w-8 h-8 md:w-10 md:h-10" /></div></div>
+                        <div className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-stone-50 flex items-center justify-between shadow-orange-50/20"><div className="space-y-2"><p className="text-[11px] font-black text-stone-300 uppercase tracking-widest leading-none">Exercises</p><p className="text-4xl md:text-5xl font-black text-stone-800 leading-none">{problems.length}題</p></div><div className="p-4 bg-amber-50 rounded-2xl md:rounded-3xl text-amber-500 shadow-sm"><Database className="w-8 h-8 md:w-10 md:h-10" /></div></div>
+                    </div>
+                    <div className="bg-white rounded-[2.5rem] md:rounded-[4rem] shadow-2xl border border-amber-50 overflow-hidden min-h-[600px]">
+                        <div className="border-b border-orange-50 bg-[#fafafa] flex flex-col sm:flex-row justify-between items-center px-6 md:px-12"><div className="flex overflow-x-auto no-scrollbar"><button onClick={() => setActiveTab('progress')} className={`whitespace-nowrap px-8 py-8 md:py-10 font-black text-xs transition-all border-b-4 ${activeTab === 'progress' ? 'border-amber-500 text-amber-600' : 'border-transparent text-stone-300'}`}>分析ダッシュボード</button><button onClick={() => setActiveTab('students')} className={`whitespace-nowrap px-8 py-8 md:py-10 font-black text-xs transition-all border-b-4 ${activeTab === 'students' ? 'border-amber-500 text-amber-600' : 'border-transparent text-stone-300'}`}>生徒管理</button><button onClick={() => setActiveTab('problems')} className={`whitespace-nowrap px-8 py-8 md:py-10 font-black text-xs transition-all border-b-4 ${activeTab === 'problems' ? 'border-amber-500 text-amber-600' : 'border-transparent text-stone-300'}`}>問題管理</button></div></div>
+                        <div className="p-10">{activeTab === 'progress' && <ProgressTracker drillStep={drillStep} setDrillStep={setDrillStep} selectedCat={selectedCat} setSelectedCat={setSelectedCat} selectedProb={selectedProb} setSelectedProb={setSelectedProb} selectedSub={selectedSub} setSelectedSub={setSelectedSub} problems={problems} submissions={submissions} students={students} />}{activeTab === 'students' && <StudentManager students={students} submissions={submissions} />}{activeTab === 'problems' && <ProblemManager problems={problems} />}</div>
+                    </div>
+                </div>
+            );
+        }
+
+        function ProgressTracker({ drillStep, setDrillStep, selectedCat, setSelectedCat, selectedProb, setSelectedProb, selectedSub, setSelectedSub, problems, submissions, students }) {
+            if (drillStep === 'category') { 
+                return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 py-6">
+                        <button onClick={() => { setSelectedCat('translation'); setDrillStep('problem-list'); }} className="p-10 rounded-[2.5rem] bg-white border-4 border-stone-50 hover:border-amber-200 transition-all text-center shadow-lg group">
+                            <Languages className="w-12 text-amber-500 mx-auto mb-4 group-hover:scale-110 transition-transform shadow-sm" />
+                            <h4 className="text-xl md:text-2xl font-black text-stone-800">和文英訳の進捗</h4>
+                        </button>
+                        <button onClick={() => { setSelectedCat('essay'); setDrillStep('problem-list'); }} className="p-10 rounded-[2.5rem] bg-white border-4 border-stone-50 hover:border-orange-200 transition-all text-center shadow-lg group">
+                            <FileText className="w-12 text-orange-500 mx-auto mb-4 group-hover:scale-110 transition-transform shadow-sm" />
+                            <h4 className="text-xl md:text-2xl font-black text-stone-800">パラグラフの進捗</h4>
+                        </button>
+                    </div>
+                ); 
+            }
+            if (drillStep === 'problem-list') { 
+                const filtered = problems.filter(p => p.type === selectedCat); 
+                return (
+                    <div className="animate-in slide-in-from-left-4">
+                        <button onClick={() => setDrillStep('category')} className="flex items-center gap-2 text-stone-400 font-bold mb-8 hover:text-amber-600"><ChevronLeft className="w-4" /> 戻る</button>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {filtered.map(p => { 
+                                const count = submissions.filter(s => s.problemId === p.id && s.status === 'submitted').length; 
+                                return (
+                                    <button key={p.id} onClick={() => { setSelectedProb(p); setDrillStep('submission-list'); }} className="p-6 md:p-8 rounded-[2rem] bg-white border-2 border-stone-50 hover:border-amber-400 hover:shadow-xl transition-all text-left flex flex-col justify-between h-48 group shadow-sm">
+                                        <div><h5 className="font-black text-stone-800 line-clamp-2 leading-tight tracking-tight">{p.title}</h5><p className="text-[10px] md:text-xs text-stone-400 mt-2 line-clamp-2 italic leading-relaxed">"{p.japaneseText}"</p></div>
+                                        <div className="flex justify-between items-center"><span className="text-[9px] md:text-[10px] font-black text-amber-600 bg-amber-50 px-3 py-1 rounded-full border border-amber-100 shadow-sm leading-none">提出: {count}名</span><ArrowRight className="w-4 h-4 text-stone-200" /></div>
+                                    </button>
+                                ); 
+                            })}
+                        </div>
+                    </div>
+                ); 
+            }
+            if (drillStep === 'submission-list') { 
+                const problemSubs = submissions.filter(s => s.problemId === selectedProb.id && s.status === 'submitted'); 
+                return (
+                    <div className="animate-in slide-in-from-left-4">
+                        <button onClick={() => setDrillStep('problem-list')} className="flex items-center gap-2 text-stone-400 font-bold mb-8"><ChevronLeft className="w-4 h-4" /> 戻る</button>
+                        <div className="bg-amber-50/50 p-6 md:p-10 rounded-[2rem] mb-12 border border-amber-100 flex flex-col md:flex-row justify-between items-start md:items-end gap-4 shadow-sm">
+                            <div className="space-y-1"><h4 className="text-[10px] md:text-xs font-black text-amber-500 uppercase tracking-widest mb-2">Analyzing Results</h4><p className="text-xl md:text-2xl font-black text-stone-800 leading-tight">{selectedProb.title}</p></div>
+                            <div><span className="text-3xl font-black text-amber-600 leading-none">{problemSubs.length}</span><span className="text-xs font-bold text-stone-400 uppercase tracking-tighter leading-none"> Submissions</span></div>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left min-w-[500px]">
+                                <thead><tr className="text-[10px] md:text-[11px] font-black text-stone-300 uppercase tracking-[0.4em]"><th className="pb-8 px-6">生徒名</th><th className="pb-8 px-6">スコア</th><th className="pb-8 px-6">提出日時</th><th className="pb-8 px-6 text-right">詳細</th></tr></thead>
+                                <tbody className="divide-y divide-stone-50">
+                                    {problemSubs.map(s => { 
+                                        const student = students.find(st => st.studentId === s.studentId); 
+                                        return (
+                                            <tr key={s.id} className="hover:bg-amber-50/10 transition-all group duration-300">
+                                                <td className="py-6 px-6 font-black text-stone-700 cursor-pointer hover:text-amber-600" onClick={() => { setSelectedSub(s); setDrillStep('detail'); }}>{student?.studentName || `ID: ${s.studentId}`}</td>
+                                                <td className="py-6 px-6 font-black text-amber-600 text-xl leading-none">{s.reviewData?.totalScore || "---"}</td>
+                                                <td className="py-6 px-6 text-[10px] font-bold text-stone-400">{s.submittedAt?.toDate().toLocaleString() || "---"}</td>
+                                                <td className="py-6 px-6 text-right"><button onClick={() => { setSelectedSub(s); setDrillStep('detail'); }} className="p-3 md:p-4 bg-stone-100 rounded-xl hover:bg-amber-500 hover:text-white text-stone-400 transition-all active:scale-95 shadow-sm"><Eye className="w-4 h-4 md:w-5 md:h-5" /></button></td>
+                                            </tr>
+                                        ); 
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                ); 
+            }
+            if (drillStep === 'detail') { return (<div className="animate-in zoom-in-95"><button onClick={() => setDrillStep('submission-list')} className="flex items-center gap-2 text-stone-400 font-bold mb-8 hover:text-amber-600"><ChevronLeft className="w-4 h-4" /> 提出リストに戻る</button><ReviewDisplay review={selectedSub.reviewData} answer={selectedSub.answerText} isReadOnly={true} problem={selectedProb} onComplete={() => setDrillStep('submission-list')} /></div>); }
+        }
+
+        function StudentManager({ students, submissions }) {
+            const [csvInput, setCsvInput] = useState(""); 
+            const [isProcessing, setIsProcessing] = useState(false); 
+            const fileInputRef = useRef(null);
+            
+            const handleStudentUpload = async (text) => { 
+                const inputToProcess = text || csvInput; 
+                if (!inputToProcess.trim()) return; 
+                setIsProcessing(true); 
+                const rows = inputToProcess.split('\n').filter(r => r.trim()); 
+                const dataRows = (rows[0].includes('名前') || rows[0].includes('ID')) ? rows.slice(1) : rows; 
+                try { 
+                    for (const row of dataRows) { 
+                        const [studentId, studentName] = row.split(',').map(s => s?.trim()); 
+                        if (!studentId || !studentName) continue; 
+                        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), { studentId, studentName, registeredAt: serverTimestamp() }, { merge: true }); 
+                    } 
+                    setCsvInput(""); 
+                    alert(`${dataRows.length}名を登録しました。`); 
+                } catch (err) { alert("登録エラー"); } finally { setIsProcessing(false); } 
+            };
+
+            const exportStudentsCsv = () => { 
+                const headers = ["StudentID", "StudentName", "TranslationCount", "EssayCount"]; 
+                const rows = students.map(st => { 
+                    const tc = submissions.filter(s => s.studentId === st.studentId && s.problemType === 'translation' && s.status === 'submitted').length; 
+                    const ec = submissions.filter(s => s.studentId === st.studentId && s.problemType === 'essay' && s.status === 'submitted').length; 
+                    return [st.studentId, st.studentName, tc, ec]; 
+                }); 
+                const csvContent = "\uFEFF" + [headers, ...rows].map(e => e.join(",")).join("\n"); 
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); 
+                const link = document.createElement("a"); 
+                link.href = URL.createObjectURL(blob); 
+                link.download = "student_list.csv"; 
+                link.click(); 
+            };
+
+            return (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 md:gap-16 animate-in fade-in">
+                    <div className="space-y-8">
+                        <div className="bg-[#fcfcfc] p-8 md:p-12 rounded-[2.5rem] border border-stone-100 shadow-inner">
+                            <div className="flex items-center gap-4 mb-8">
+                                <div className="p-4 bg-amber-500 rounded-2xl md:rounded-3xl text-white shadow-lg"><UserPlus className="w-7 h-7" /></div>
+                                <h3 className="text-lg md:text-xl font-black text-stone-800 leading-none">生徒CSVインポート</h3>
+                            </div>
+                            <div className="mb-6 flex gap-3">
+                                <input type="file" ref={fileInputRef} onChange={(e) => { const f = e.target.files[0]; if (f) { const r = new FileReader(); r.onload = (ev) => handleStudentUpload(ev.target.result); r.readAsText(f); e.target.value = null; } }} className="hidden" accept=".csv" />
+                                <button onClick={() => fileInputRef.current.click()} className="flex-1 flex items-center justify-center gap-2 bg-white border-2 border-amber-200 text-amber-600 py-4 rounded-2xl font-bold hover:bg-amber-50 transition-all text-xs shadow-sm shadow-orange-50/50"><FolderOpen className="w-4 h-4" /> CSVを選択</button>
+                            </div>
+                            <textarea value={csvInput} onChange={(e) => setCsvInput(e.target.value)} placeholder="貼り付け: ID, 名前" className="w-full h-40 p-8 text-sm font-mono border-2 border-stone-50 rounded-[2rem] mb-8 bg-white focus:outline-none focus:ring-[10px] focus:ring-amber-50 transition-all shadow-sm" />
+                            <button onClick={() => handleStudentUpload()} disabled={isProcessing || !csvInput.trim()} className="w-full bg-[#1f1d1b] text-white py-5 rounded-3xl font-black shadow-xl hover:bg-stone-800 active:scale-95 transition-all text-xs tracking-widest leading-none shadow-stone-300">{isProcessing ? "登録中..." : "登録を実行する"}</button>
+                        </div>
+                    </div>
+                    <div className="space-y-8">
+                        <div className="flex justify-between items-center px-4 md:px-6">
+                            <h3 className="text-lg md:text-xl font-black text-stone-800 leading-none">登録済み生徒 ({students.length})</h3>
+                            <button onClick={exportStudentsCsv} className="flex items-center gap-2 text-[10px] font-black text-amber-600 hover:bg-amber-50 px-3 md:px-4 py-2 rounded-xl transition-all border border-amber-100 shadow-sm active:scale-95"><Download className="w-3 h-3 md:w-4 md:h-4" /> CSV出力</button>
+                        </div>
+                        <div className="space-y-4 max-h-[600px] overflow-y-auto pr-4 md:pr-6 custom-scrollbar pb-10">
+                            {students.map(st => { 
+                                const tc = submissions.filter(s => s.studentId === st.studentId && s.problemType === 'translation' && s.status === 'submitted').length; 
+                                const ec = submissions.filter(s => s.studentId === st.studentId && s.problemType === 'essay' && s.status === 'submitted').length; 
+                                return (
+                                    <div key={st.studentId} className="p-6 border-2 border-stone-50 rounded-[2rem] bg-white shadow-sm flex justify-between items-center group transition-all hover:border-amber-400 shadow-orange-50/10">
+                                        <div className="flex items-center gap-4">
+                                            <div className="w-10 h-10 bg-stone-50 rounded-full flex items-center justify-center font-black text-stone-300 group-hover:bg-amber-50 group-hover:text-amber-500 uppercase leading-none">{st.studentName[0]}</div>
+                                            <div><h5 className="font-black text-base md:text-lg text-stone-800 tracking-tight leading-none">{st.studentName}</h5><p className="text-[9px] md:text-[10px] font-mono text-stone-300 tracking-tighter uppercase mt-1">ID: {st.studentId}</p></div>
+                                        </div>
+                                        <div className="flex gap-4 md:gap-6">
+                                            <div className="text-center"><span className="text-[8px] md:text-[9px] font-black text-stone-400 uppercase block mb-1 leading-none">和訳</span><span className="text-base md:text-lg font-black text-amber-500 leading-none">{tc}</span></div>
+                                            <div className="text-center"><span className="text-[8px] md:text-[9px] font-black text-stone-400 uppercase block mb-1 leading-none">エッセイ</span><span className="text-base md:text-lg font-black text-orange-500 leading-none">{ec}</span></div>
+                                        </div>
+                                    </div>
+                                ); 
+                            })}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function ProblemManager({ problems }) {
+            const [transInput, setTransInput] = useState(""); 
+            const [essayInput, setEssayInput] = useState(""); 
+            const [isProcessing, setIsProcessing] = useState(false); 
+            const fileRefTrans = useRef(null); 
+            const fileRefEssay = useRef(null);
+
+            const handleUpload = async (input) => { 
+                if (!input || !input.trim()) return; 
+                setIsProcessing(true); 
+                const rows = input.split('\n').filter(r => r.trim()); 
+                const dataRows = (rows[0].includes('タイトル') || rows[0].includes('Title')) ? rows.slice(1) : rows; 
+                try { 
+                    for (const row of dataRows) { 
+                        const cols = row.split(',').map(s => s?.trim()); 
+                        if (cols.length < 3) continue; 
+                        const [title, type, japaneseText, modelAnswer, logicPrompt, category, difficulty] = cols; 
+                        if (!title || !japaneseText) continue; 
+                        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'problems'), { title, type: type || 'translation', japaneseText, modelAnswer: modelAnswer || "", logicPrompt: logicPrompt || "", category: category || "General", difficulty: parseInt(difficulty) || 1, createdAt: serverTimestamp() }); 
+                    } 
+                    setTransInput(""); 
+                    setEssayInput(""); 
+                    alert(`登録が完了しました。`); 
+                } catch (err) { alert("エラーが発生しました。"); } finally { setIsProcessing(false); } 
+            };
+
+            const exportProblemsCsv = () => { 
+                const headers = ["Title", "Type", "JapaneseText", "ModelAnswer", "LogicPrompt", "Category", "Difficulty"]; 
+                const rows = problems.map(p => [p.title, p.type, `"${p.japaneseText.replace(/"/g, '""')}"`, `"${p.modelAnswer || ''}"`, `"${p.logicPrompt || ''}"`, p.category, p.difficulty]); 
+                const csvContent = "\uFEFF" + [headers, ...rows].map(e => e.join(",")).join("\n"); 
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); 
+                const link = document.createElement("a"); 
+                link.href = URL.createObjectURL(blob); 
+                link.download = "exercises_full_export.csv"; 
+                link.click(); 
+            };
+
+            return (
+                <div className="space-y-10 md:space-y-12 animate-in fade-in pb-20 duration-700">
+                    <div className="flex justify-end px-4 md:px-6"><button onClick={exportProblemsCsv} className="flex items-center gap-3 bg-stone-800 text-white px-6 py-3 rounded-2xl text-xs font-black hover:bg-stone-700 transition-all shadow-xl leading-none active:scale-95 shadow-orange-50/20"><Download className="w-4 h-4 md:w-5 md:h-5" /> 全データをCSVで出力</button></div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 md:gap-12">
+                        <div className="bg-amber-50/50 p-8 md:p-10 rounded-[2.5rem] md:rounded-[3rem] border border-amber-100 shadow-inner">
+                            <div className="flex items-center gap-4 mb-6">
+                                <div className="p-3 md:p-4 bg-amber-500 rounded-2xl md:rounded-3xl text-white shadow-lg shadow-amber-200"><Languages className="w-5 h-5 md:w-6 md:h-6" /></div>
+                                <h3 className="text-lg md:text-xl font-black text-stone-800 leading-none">和文英訳登録</h3>
+                            </div>
+                            <input type="file" ref={fileRefTrans} onChange={(e) => { const f = e.target.files[0]; if (f) { const r = new FileReader(); r.onload = (ev) => handleUpload(ev.target.result); r.readAsText(f); e.target.value = null; } }} className="hidden" accept=".csv" />
+                            <button onClick={() => fileRefTrans.current.click()} className="w-full mb-6 flex items-center justify-center gap-2 bg-white border-2 border-amber-200 text-amber-600 py-4 rounded-2xl font-bold hover:bg-amber-50 transition-all active:scale-95 text-xs shadow-sm shadow-orange-50/50"><FileUp className="w-5 h-5" /> CSVを選択</button>
+                            <textarea value={transInput} onChange={(e) => setTransInput(e.target.value)} placeholder="例: タイトル, translation, 日本文..." className="w-full h-40 md:h-48 p-6 md:p-8 text-sm font-mono bg-white border-2 border-amber-100 rounded-2xl md:rounded-[2rem] mb-6 focus:outline-none shadow-sm shadow-stone-100" />
+                            <button onClick={() => handleUpload(transInput)} disabled={isProcessing || !transInput.trim()} className="w-full bg-amber-500 text-white py-4 md:py-5 rounded-2xl md:rounded-3xl font-black shadow-xl hover:bg-amber-600 active:scale-95 transition-all text-xs tracking-widest leading-none shadow-orange-100">登録を実行</button>
+                        </div>
+                        <div className="bg-orange-50/50 p-8 md:p-10 rounded-[2.5rem] md:rounded-[3rem] border border-orange-100 shadow-inner">
+                            <div className="flex items-center gap-4 mb-6">
+                                <div className="p-3 md:p-4 bg-orange-500 rounded-2xl md:rounded-3xl text-white shadow-lg shadow-orange-200"><FileText className="w-5 h-5 md:w-6 md:h-6" /></div>
+                                <h3 className="text-lg md:text-xl font-black text-stone-800 leading-none">パラグラフ登録</h3>
+                            </div>
+                            <input type="file" ref={fileRefEssay} onChange={(e) => { const f = e.target.files[0]; if (f) { const r = new FileReader(); r.onload = (ev) => handleUpload(ev.target.result); r.readAsText(f); e.target.value = null; } }} className="hidden" accept=".csv" />
+                            <button onClick={() => fileRefEssay.current.click()} className="w-full mb-6 flex items-center justify-center gap-2 bg-white border-2 border-orange-200 text-orange-600 py-4 rounded-2xl font-bold hover:bg-orange-50 active:scale-95 text-xs shadow-sm shadow-orange-50/50"><FileUp className="w-5 h-5" /> CSVを選択</button>
+                            <textarea value={essayInput} onChange={(e) => setEssayInput(e.target.value)} placeholder="例: タイトル, essay, お題..." className="w-full h-40 md:h-48 p-6 md:p-8 text-sm font-mono bg-white border-2 border-orange-100 rounded-2xl md:rounded-[2rem] mb-6 focus:outline-none shadow-sm shadow-stone-100" />
+                            <button onClick={() => handleUpload(essayInput)} disabled={isProcessing || !essayInput.trim()} className="w-full bg-orange-500 text-white py-4 md:py-5 rounded-2xl md:rounded-3xl font-black shadow-xl hover:bg-orange-600 active:scale-95 transition-all text-xs tracking-widest leading-none shadow-orange-100">登録を実行</button>
+                        </div>
+                    </div>
+                    <div className="space-y-10 pt-8 px-2">
+                        <h3 className="text-xl font-black text-stone-800 tracking-tight leading-none px-4">公開中の演習セット ({problems.length}題)</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-24">
+                            {problems.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)).map(p => (
+                                <div key={p.id} className="p-8 border-2 border-stone-50 rounded-[2.5rem] bg-white shadow-sm hover:shadow-xl transition-all duration-500 group relative flex flex-col h-full shadow-orange-50/20">
+                                    <div className="flex-1">
+                                        <span className={`text-[9px] font-black px-4 py-1.5 rounded-full uppercase border ${p.type === 'translation' ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-orange-50 text-orange-600 border-orange-100'}`}>{p.type === 'translation' ? '和訳' : 'パラグラフ'}</span>
+                                        <h4 className="font-black text-lg text-stone-800 mt-5 group-hover:text-amber-600 transition-colors leading-tight tracking-tight">{p.title}</h4>
+                                        <p className="text-xs text-stone-400 mt-4 line-clamp-2 italic font-medium leading-relaxed">"{p.japaneseText}"</p>
+                                    </div>
+                                    <div className="mt-8 pt-6 border-t border-stone-50 flex items-center justify-between">
+                                        <div className="flex gap-1.5">{[...Array(p.difficulty || 1)].map((_, i) => <div key={i} className="w-2 h-2 bg-amber-400 rounded-full shadow-sm"></div>)}</div>
+                                        <span className="text-[10px] font-mono text-stone-200 uppercase tracking-tighter leading-none">Level {p.difficulty}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
