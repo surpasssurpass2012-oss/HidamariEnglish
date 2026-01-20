@@ -11,15 +11,16 @@ export default async function handler(req, res) {
   
   // もし鍵が設定されていなければエラーを返します
   if (!apiKey) {
-    return res.status(500).json({ error: 'Server Configuration Error: API Key not found' });
+    return res.status(500).json({ error: 'Server Configuration Error: API Key not found. Please check Vercel Environment Variables.' });
   }
 
   try {
     // フロントエンド（画面）から送られてきたデータ（プロンプト等）を取り出します
     const payload = req.body;
 
-    // Google Gemini APIの宛先（モデルは gemini-2.5-flash-preview-09-2025 を使用）
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+    // Google Gemini APIの宛先
+    // 修正: より確実に動作する安定版モデル「gemini-1.5-flash」に変更しました
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
     // ここでサーバーからGoogleへ問い合わせを行います
     // ユーザーにはAPIキーが見えないので安全です
@@ -34,6 +35,8 @@ export default async function handler(req, res) {
     // Googleからの応答がエラーだった場合の処理
     if (!googleResponse.ok) {
       const errorData = await googleResponse.json();
+      // エラー内容をより詳細にログに出力します
+      console.error("Gemini API Error Detail:", JSON.stringify(errorData));
       throw new Error(`Gemini API Error: ${errorData.error?.message || googleResponse.statusText}`);
     }
 
