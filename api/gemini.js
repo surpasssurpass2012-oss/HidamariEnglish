@@ -1,40 +1,70 @@
-// Node.jsの標準的な書き方に変更
+const https = require('https');
+
 module.exports = async (req, res) => {
-  // POSTメソッドのみ許可
+  // 1. CORSエラー対策（ブラウザからのアクセスを許可）
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+  );
+
+  // プリフライトリクエスト（確認通信）への応答
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  // 2. メソッドチェック
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  // 3. APIキーチェック
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ error: 'Server Config Error: API Key missing' });
   }
 
-  try {
-    const payload = req.body;
-    // 安定版モデルを使用
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  // 4. Gemini APIへのリクエスト（httpsモジュール使用）
+  const payload = JSON.stringify(req.body);
+  const options = {
+    hostname: 'generativelanguage.googleapis.com',
+    path: `/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload)
+    }
+  };
 
-    // Node.js環境(18以上)ではfetchが使えますが、念のためtry-catch内で実行
-    const googleResponse = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+  return new Promise((resolve, reject) => {
+    const apiReq = https.request(options, (apiRes) => {
+      let data = '';
+      apiRes.on('data', (chunk) => { data += chunk; });
+      apiRes.on('end', () => {
+        if (apiRes.statusCode >= 200 && apiRes.statusCode < 300) {
+          try {
+            res.status(200).json(JSON.parse(data));
+          } catch (e) {
+            res.status(500).json({ error: 'JSON Parse Error' });
+          }
+        } else {
+          console.error("Gemini API Error:", data);
+          res.status(apiRes.statusCode).json({ error: `Gemini API Error: ${data}` });
+        }
+        resolve();
+      });
     });
 
-    if (!googleResponse.ok) {
-      const errorData = await googleResponse.json();
-      console.error("Gemini Error:", JSON.stringify(errorData));
-      throw new Error(errorData.error?.message || googleResponse.statusText);
-    }
+    apiReq.on('error', (e) => {
+      console.error("Request Error:", e);
+      res.status(500).json({ error: e.message });
+      resolve();
+    });
 
-    const data = await googleResponse.json();
-    return res.status(200).json(data);
-
-  } catch (error) {
-    console.error("Server Error:", error);
-    return res.status(500).json({ error: error.message });
-  }
+    apiReq.write(payload);
+    apiReq.end();
+  });
 };
